@@ -23,6 +23,9 @@
     .secondary { background:#eaf3fb; color:#24496b; }
     .actions { display:flex; gap:10px; margin-top:20px; }
     .actions button { flex:1; }
+    .mode-switch { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:18px 0 4px; padding:4px; border-radius:999px; background:#eef5fb; }
+    .mode-switch button { padding:9px 12px; background:transparent; color:#60788d; }
+    .mode-switch button[aria-selected="true"] { background:white; color:#1762a8; box-shadow:0 2px 10px #24496b1a; }
     #status { min-height:24px; margin:16px 0 0; color:#9d3131; }
     [hidden] { display:none !important; }
     ul { padding-left:20px; line-height:1.7; }
@@ -36,10 +39,18 @@
     <p class="muted">Sign in, then choose whether ChatGPT may access your English learning profile.</p>
 
     <section id="login" hidden>
+      <div class="mode-switch" role="tablist" aria-label="Account access">
+        <button id="show-sign-in" role="tab" aria-selected="true">Sign in</button>
+        <button id="show-sign-up" role="tab" aria-selected="false">Create account</button>
+      </div>
       <label for="email">Email</label>
       <input id="email" type="email" autocomplete="email" inputmode="email">
       <label for="password">Password</label>
       <input id="password" type="password" autocomplete="current-password">
+      <div id="confirm-password-field" hidden>
+        <label for="confirm-password">Confirm password</label>
+        <input id="confirm-password" type="password" autocomplete="new-password">
+      </div>
       <div class="actions"><button id="sign-in" class="primary">Sign in</button></div>
     </section>
 
@@ -58,7 +69,7 @@
   </main>
 
   <script type="module">
-    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+    import { createClient } from "https://esm.sh/@supabase/supabase-js@2.112.3";
 
     const client = createClient(
       "https://yjdolbpitzefcshidmmz.supabase.co",
@@ -69,10 +80,33 @@
     const login = document.querySelector("#login");
     const consent = document.querySelector("#consent");
     const signIn = document.querySelector("#sign-in");
+    const showSignIn = document.querySelector("#show-sign-in");
+    const showSignUp = document.querySelector("#show-sign-up");
+    const confirmPasswordField = document.querySelector("#confirm-password-field");
     const approve = document.querySelector("#approve");
     const deny = document.querySelector("#deny");
-    const setBusy = (busy) => { signIn.disabled = busy; approve.disabled = busy; deny.disabled = busy; };
+    let accountMode = "sign-in";
+    const setBusy = (busy) => {
+      signIn.disabled = busy;
+      showSignIn.disabled = busy;
+      showSignUp.disabled = busy;
+      approve.disabled = busy;
+      deny.disabled = busy;
+    };
     const fail = (message) => { setBusy(false); status.textContent = message; };
+
+    function setAccountMode(mode) {
+      accountMode = mode;
+      const creating = mode === "sign-up";
+      showSignIn.setAttribute("aria-selected", String(!creating));
+      showSignUp.setAttribute("aria-selected", String(creating));
+      confirmPasswordField.hidden = !creating;
+      document.querySelector("#password").autocomplete = creating ? "new-password" : "current-password";
+      signIn.textContent = creating ? "Create account" : "Sign in";
+      status.textContent = creating
+        ? "Create an account to continue. You may need to confirm your email."
+        : "Please sign in to continue.";
+    }
 
     async function render() {
       if (!authorizationId) return fail("This authorization request is missing or invalid.");
@@ -114,15 +148,32 @@
 
     signIn.addEventListener("click", async () => {
       setBusy(true);
-      status.textContent = "Signing in…";
-      const { error } = await client.auth.signInWithPassword({
-        email: document.querySelector("#email").value,
-        password: document.querySelector("#password").value
-      });
-      if (error) return fail("Sign-in failed. Check the email and password.");
+      const email = document.querySelector("#email").value.trim();
+      const password = document.querySelector("#password").value;
+      if (!email || !password) return fail("Enter an email address and password.");
+      if (accountMode === "sign-up") {
+        if (password.length < 8) return fail("Choose a password with at least 8 characters.");
+        if (password !== document.querySelector("#confirm-password").value) return fail("The passwords do not match.");
+        status.textContent = "Creating account…";
+        const emailRedirectTo = location.href.split("#")[0];
+        const { data, error } = await client.auth.signUp({ email, password, options: { emailRedirectTo } });
+        if (error) return fail("Account creation failed. Check the details or try signing in.");
+        if (!data.session) {
+          setBusy(false);
+          status.textContent = "Check your email to confirm the account, then return here. If this request expires, reconnect from ChatGPT.";
+          return;
+        }
+      } else {
+        status.textContent = "Signing in…";
+        const { error } = await client.auth.signInWithPassword({ email, password });
+        if (error) return fail("Sign-in failed. Check the email and password.");
+      }
       setBusy(false);
       await render();
     });
+
+    showSignIn.addEventListener("click", () => setAccountMode("sign-in"));
+    showSignUp.addEventListener("click", () => setAccountMode("sign-up"));
 
     approve.addEventListener("click", async () => {
       setBusy(true);
